@@ -151,13 +151,13 @@ def video_download():
 
 
 # =============================================================================
-# API: Улучшение фото (OpenCV + scikit-image) — автоматическое
+# API: Улучшение фото (OpenCV + scikit-image) — полный пайплайн
 # =============================================================================
 @app.route('/api/photo/enhance', methods=['POST'])
 def photo_enhance():
     import cv2
     import numpy as np
-    from skimage import exposure
+    from skimage import exposure, restoration
     from skimage.color import rgb2lab, lab2rgb
 
     if 'photo' not in request.files:
@@ -168,12 +168,7 @@ def photo_enhance():
         return jsonify({'success': False, 'error': 'Неподдерживаемый формат'}), 400
 
     try:
-        # Настройки по умолчанию — оптимальные для улучшения качества
-        SHARPNESS = 2.0
-        CONTRAST = 1.4
-        BRIGHTNESS = 1.15
-
-        # Читаем через OpenCV
+        # ─── Чтение через OpenCV ───
         nparr = np.frombuffer(file.read(), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -182,7 +177,40 @@ def photo_enhance():
 
         original_h, original_w = img.shape[:2]
 
-        # ─── 1. Увеличение в 8 раз (OpenCV Lanczos) ───
+        # ================================================================
+        # ШАГ 1: ШУМОПОДАВЛЕНИЕ (убирает зернистость, ISO-шум)
+        # ================================================================
+        # fastNlMeansDenoisingColored — лучший для фото
+        img = cv2.fastNlMeansDenoisingColored(
+            img,
+            h=10,        # сила удаления шума (luminance)
+            hColor=10,   # сила удаления шума (color)
+            templateWindowSize=7,
+            searchWindowSize=21
+        )
+
+        # ================================================================
+        # ШАГ 2: ПОВЫШЕНИЕ РЕЗКОСТИ (компенсация размытия)
+        # ================================================================
+        # Unsharp Mask через разность с размытым
+        blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=2.0)
+        # sharpened = img + strength * (img - blurred)
+        strength = 2.5
+        img = cv2.addWeighted(img, 1.0 + strength, blurred, -strength, 0)
+
+        # Дополнительная резкость мелких деталей (лапласиан)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        # Усиление контуров через лапласиан
+        detail_strength = 0.15
+        img_float = img.astype(np.float32)
+        laplacian_3ch = np.stack([laplacian] * 3, axis=-1)
+        img_float = img_float - detail_strength * laplacian_3ch.astype(np.float32)
+        img = np.clip(img_float, 0, 255).astype(np.uint8)
+
+        # ================================================================
+        # ШАГ 3: ИНТЕРПОЛЯЦИЯ ПИКСЕЛЕЙ (увеличение 8x с Lanczos)
+        # ================================================================
         new_w = original_w * 8
         new_h = original_h * 8
 
@@ -192,39 +220,40 @@ def photo_enhance():
             new_w = int(original_w * scale)
             new_h = int(original_h * scale)
 
+        # Lanczos-4 — наилучшая интерполяция для увеличения
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
-        # ─── 2. Яркость ───
-        img = np.clip(img.astype(np.float32) * BRIGHTNESS, 0, 255).astype(np.uint8)
+        # ================================================================
+        # ШАГ 4: КОРРЕКЦИЯ КОНТРАСТА И ЦВЕТА
+        # ================================================================
 
-        # ─── 3. Контраст через CLAHE ───
+        # 4a. Адаптивный контраст через CLAHE (по зонам)
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        clip_limit = max(1.0, CONTRAST * 2.0)
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-        # ─── 4. Резкость через Unsharp Mask ───
-        blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=3)
-        img = cv2.addWeighted(img, 1.0 + SHARPNESS, blurred, -SHARPNESS, 0)
-
-        # ─── 5. Цветокоррекция через scikit-image ───
+        # 4b. Цветокоррекция через scikit-image (Gamma + LAB насыщенность)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img_float = img_rgb.astype(np.float32) / 255.0
 
-        gamma = 1.0 / max(0.8, CONTRAST * 0.9)
-        img_float = exposure.adjust_gamma(img_float, gamma)
+        # Gamma correction — делает тени и светлые участки естественнее
+        img_float = exposure.adjust_gamma(img_float, 0.92)
 
+        # Повышение насыщенности в цветовом пространстве LAB
         img_lab = rgb2lab(img_float)
-        color_boost = 1.0 + (CONTRAST - 1.0) * 0.5
-        img_lab[:, :, 1] *= color_boost
-        img_lab[:, :, 2] *= color_boost
+        color_boost = 1.3  # +30% насыщенности
+        img_lab[:, :, 1] *= color_boost  # a-канал (красный-зелёный)
+        img_lab[:, :, 2] *= color_boost  # b-канал (синий-жёлтый)
         img_float = lab2rgb(img_lab)
 
+        # Финальная конвертация
         img_final = (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
         img_bgr = cv2.cvtColor(img_final, cv2.COLOR_RGB2BGR)
 
+        # ================================================================
         # Сохранение
+        # ================================================================
         out_filename = generate_filename('jpg')
         out_path = UPLOAD_DIR / out_filename
         cv2.imwrite(str(out_path), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -235,6 +264,7 @@ def photo_enhance():
             'success': True,
             'size': f"{file_size // 1024} КБ",
             'dimensions': f"{new_w}×{new_h}",
+            'quality': 'улучшено (шум→резкость→8x→контраст+цвет)',
             'download_url': f'/uploads/{out_filename}'
         })
 
