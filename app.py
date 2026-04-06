@@ -151,7 +151,7 @@ def video_download():
 
 
 # =============================================================================
-# API: Улучшение фото (OpenCV + scikit-image)
+# API: Улучшение фото (OpenCV + scikit-image) — автоматическое
 # =============================================================================
 @app.route('/api/photo/enhance', methods=['POST'])
 def photo_enhance():
@@ -168,9 +168,10 @@ def photo_enhance():
         return jsonify({'success': False, 'error': 'Неподдерживаемый формат'}), 400
 
     try:
-        sharpness = float(request.form.get('sharpness', 1.5))
-        contrast = float(request.form.get('contrast', 1.2))
-        brightness = float(request.form.get('brightness', 1.1))
+        # Настройки по умолчанию — оптимальные для улучшения качества
+        SHARPNESS = 2.0
+        CONTRAST = 1.4
+        BRIGHTNESS = 1.15
 
         # Читаем через OpenCV
         nparr = np.frombuffer(file.read(), np.uint8)
@@ -193,43 +194,33 @@ def photo_enhance():
 
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
-        # ─── 2. Яркость (простое умножение с клиппингом) ───
-        img = np.clip(img.astype(np.float32) * brightness, 0, 255).astype(np.uint8)
+        # ─── 2. Яркость ───
+        img = np.clip(img.astype(np.float32) * BRIGHTNESS, 0, 255).astype(np.uint8)
 
-        # ─── 3. Контраст через CLAHE (адаптивный контраст) ───
+        # ─── 3. Контраст через CLAHE ───
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        l_channel = lab[:, :, 0]
-
-        # CLAHE: clipLimit контролирует силу контраста
-        clip_limit = max(1.0, contrast * 2.0)
+        clip_limit = max(1.0, CONTRAST * 2.0)
         clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
-        lab[:, :, 0] = clahe.apply(l_channel)
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-        # ─── 4. Резкость через Unsharp Mask (OpenCV) ───
-        # Размытие
+        # ─── 4. Резкость через Unsharp Mask ───
         blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=3)
-        # Unsharp mask: sharpened = img + strength * (img - blurred)
-        strength = sharpness
-        img = cv2.addWeighted(img, 1.0 + strength, blurred, -strength, 0)
+        img = cv2.addWeighted(img, 1.0 + SHARPNESS, blurred, -SHARPNESS, 0)
 
-        # ─── 5. Цветокоррекция через scikit-image (гамма + насыщенность) ───
+        # ─── 5. Цветокоррекция через scikit-image ───
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img_float = img_rgb.astype(np.float32) / 255.0
 
-        # Gamma correction для естественных цветов
-        gamma = 1.0 / max(0.8, contrast * 0.9)
+        gamma = 1.0 / max(0.8, CONTRAST * 0.9)
         img_float = exposure.adjust_gamma(img_float, gamma)
 
-        # Повышение насыщенности в LAB
         img_lab = rgb2lab(img_float)
-        # Увеличиваем a и b каналы (цветность)
-        color_boost = 1.0 + (contrast - 1.0) * 0.5
+        color_boost = 1.0 + (CONTRAST - 1.0) * 0.5
         img_lab[:, :, 1] *= color_boost
         img_lab[:, :, 2] *= color_boost
         img_float = lab2rgb(img_lab)
 
-        # Обратно в uint8
         img_final = (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
         img_bgr = cv2.cvtColor(img_final, cv2.COLOR_RGB2BGR)
 

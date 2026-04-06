@@ -178,19 +178,6 @@ function initVideoForm() {
 function initPhotoForm() {
     initUploadArea('photoUploadArea', 'photoFile', 'photoPreview', 'photoPreviewImg', 'photoPreviewRemove');
 
-    // Слайдеры
-    ['sharpness', 'contrast', 'brightness'].forEach(name => {
-        const slider = document.getElementById(`photo${name.charAt(0).toUpperCase() + name.slice(1)}`);
-        const display = document.getElementById(`${name}Val`);
-        slider?.addEventListener('input', () => {
-            display.textContent = slider.value;
-            // Если фото уже загружено — перезапустить обработку
-            if (document.getElementById('photoFile').files.length > 0) {
-                processPhoto();
-            }
-        });
-    });
-
     const form = document.getElementById('photoForm');
     if (!form) return;
 
@@ -214,9 +201,6 @@ async function processPhoto() {
 
     const formData = new FormData();
     formData.append('photo', file);
-    formData.append('sharpness', document.getElementById('photoSharpness').value);
-    formData.append('contrast', document.getElementById('photoContrast').value);
-    formData.append('brightness', document.getElementById('photoBrightness').value);
 
     try {
         const response = await fetch('/api/photo/enhance', {
@@ -228,7 +212,7 @@ async function processPhoto() {
         if (!data.success) throw new Error(data.error || 'Ошибка обработки');
 
         showResult('photoResult', 'photoInfo', 'photoDownloadLink',
-            `Размер: ${data.size} | ${data.dimensions} | Увеличение: 8x`, data.download_url);
+            `Размер: ${data.size} | ${data.dimensions} | Качество улучшено`, data.download_url);
         showToast('✅ Фото автоматически улучшено!');
 
     } catch (err) {
