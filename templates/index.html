@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaTool — Видео, Фото и Фон для соцсетей</title>
+    <meta name="description" content="Скачивай видео с YouTube, Rutube и Instagram. Увеличивай фото, удаляй фон, создавай контент для соцсетей.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class="navbar" role="navigation" aria-label="Главная навигация">
+        <div class="container nav-container">
+            <a href="#" class="logo" aria-label="MediaTool на главную">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">Media<span class="logo-accent">Tool</span></span>
+            </a>
+            <div class="nav-links" id="navLinks">
+                <a href="#video" class="nav-link" data-section="video">🎬 Видео</a>
+                <a href="#photo" class="nav-link" data-section="photo">📸 Фото</a>
+                <a href="#background" class="nav-link" data-section="background">🖼️ Фон</a>
+                <a href="#social" class="nav-link" data-section="social">📱 Соцсети</a>
+            </div>
+            <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Открыть меню" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="container hero-content">
+            <h1 class="hero-title">Все инструменты для <span class="gradient-text">создания контента</span> в одном месте</h1>
+            <p class="hero-subtitle">Скачивай видео, улучшай фото, удаляй фон и создавай трендовые изображения для соцсетей</p>
+            <div class="hero-cta">
+                <a href="#video" class="btn btn-primary">🎬 Начать</a>
+                <a href="#photo" class="btn btn-secondary">📸 Улучшить фото</a>
+            </div>
+        </div>
+        <div class="hero-bg-gradient"></div>
+    </section>
+
+    <!-- Видео -->
+    <section id="video" class="section" aria-labelledby="video-title">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-badge">🎬 Видео</span>
+                <h2 id="video-title" class="section-title">Скачать видео</h2>
+                <p class="section-desc">YouTube, Rutube, Instagram — вставьте ссылку и получите видео в 1080p</p>
+            </div>
+            <div class="card">
+                <form id="videoForm" class="tool-form" novalidate>
+                    <div class="form-group">
+                        <label for="videoUrl" class="form-label">Ссылка на видео</label>
+                        <div class="input-with-icon">
+                            <span class="input-icon">🔗</span>
+                            <input type="url" id="videoUrl" name="videoUrl" placeholder="https://youtube.com/watch?v=..." required aria-describedby="videoUrl-error">
+                        </div>
+                        <p class="input-hint" id="videoUrl-hint">Поддерживаются: youtube.com, youtu.be, rutube.ru, instagram.com</p>
+                        <p class="form-error" id="videoUrl-error" role="alert" hidden></p>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full" id="videoSubmitBtn">
+                        <span class="btn-text">📥 Скачать видео</span>
+                        <span class="btn-loader hidden" id="videoLoader"></span>
+                    </button>
+                </form>
+                <div class="result-box" id="videoResult" hidden>
+                    <div class="result-header">
+                        <span class="result-icon success">✅</span>
+                        <h3 id="videoTitle">Видео готово!</h3>
+                    </div>
+                    <p class="result-info" id="videoInfo"></p>
+                    <a href="#" class="btn btn-primary btn-full" id="videoDownloadLink" target="_blank" rel="noopener">📥 Открыть страницу скачивания</a>
+                </div>
+                <div class="error-box" id="videoError" hidden role="alert"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Фото-->
+    <section id="photo" class="section section-alt" aria-labelledby="photo-title">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-badge">📸 Фото</span>
+                <h2 id="photo-title" class="section-title">Улучшить фото</h2>
+                <p class="section-desc">Увеличение в 8 раз + контраст + цветокоррекция</p>
+            </div>
+            <div class="card">
+                <form id="photoForm" class="tool-form" novalidate>
+                    <div class="upload-area" id="photoUploadArea" role="button" tabindex="0" aria-label="Загрузить фото">
+                        <div class="upload-content">
+                            <span class="upload-icon">📷</span>
+                            <p class="upload-text">Перетащите фото сюда или <span class="upload-link">выберите файл</span></p>
+                            <p class="upload-hint">JPEG, PNG, WEBP — до 10 МБ</p>
+                        </div>
+                        <input type="file" id="photoFile" name="photoFile" accept="image/*" hidden required>
+                    </div>
+                    <div class="form-group photo-preview" id="photoPreview" hidden>
+                        <div class="preview-wrapper">
+                            <img id="photoPreviewImg" src="" alt="Предпросмотр загруженного фото">
+                            <button type="button" class="preview-remove" id="photoPreviewRemove" aria-label="Удалить фото">✕</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h4 class="settings-title">⚙️ Настройки</h4>
+                        <div class="settings-grid">
+                            <div class="setting-item">
+                                <label for="photoSharpness">Резкость: <span id="sharpnessVal">1.5</span>x</label>
+                                <input type="range" id="photoSharpness" min="1" max="3" step="0.1" value="1.5">
+                            </div>
+                            <div class="setting-item">
+                                <label for="photoContrast">Контраст: <span id="contrastVal">1.2</span>x</label>
+                                <input type="range" id="photoContrast" min="0.5" max="2" step="0.1" value="1.2">
+                            </div>
+                            <div class="setting-item">
+                                <label for="photoBrightness">Яркость: <span id="brightnessVal">1.1</span>x</label>
+                                <input type="range" id="photoBrightness" min="0.5" max="2" step="0.1" value="1.1">
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full" id="photoSubmitBtn">
+                        <span class="btn-text">✨ Увеличить фото</span>
+                        <span class="btn-loader hidden" id="photoLoader"></span>
+                    </button>
+                </form>
+                <div class="result-box" id="photoResult" hidden>
+                    <div class="result-header">
+                        <span class="result-icon success">✅</span>
+                        <h3>Фото улучшено!</h3>
+                    </div>
+                    <p class="result-info" id="photoInfo"></p>
+                    <a href="#" class="btn btn-primary btn-full" id="photoDownloadLink" target="_blank" rel="noopener">📥 Скачать улучшенное фото</a>
+                </div>
+                <div class="error-box" id="photoError" hidden role="alert"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Фон -->
+    <section id="background" class="section" aria-labelledby="background-title">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-badge">🖼️ Фон</span>
+                <h2 id="background-title" class="section-title">Удалить фон</h2>
+                <p class="section-desc">Автоматическое определение: люди, животные, предметы</p>
+            </div>
+            <div class="card">
+                <form id="bgForm" class="tool-form" novalidate>
+                    <div class="upload-area" id="bgUploadArea" role="button" tabindex="0" aria-label="Загрузить фото для удаления фона">
+                        <div class="upload-content">
+                            <span class="upload-icon">🖼️</span>
+                            <p class="upload-text">Перетащите фото сюда или <span class="upload-link">выберите файл</span></p>
+                            <p class="upload-hint">JPEG, PNG, WEBP — до 10 МБ</p>
+                        </div>
+                        <input type="file" id="bgFile" name="bgFile" accept="image/*" hidden required>
+                    </div>
+                    <div class="form-group photo-preview" id="bgPreview" hidden>
+                        <div class="preview-wrapper">
+                            <img id="bgPreviewImg" src="" alt="Предпросмотр загруженного фото">
+                            <button type="button" class="preview-remove" id="bgPreviewRemove" aria-label="Удалить фото">✕</button>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full" id="bgSubmitBtn">
+                        <span class="btn-text">✂️ Удалить фон</span>
+                        <span class="btn-loader hidden" id="bgLoader"></span>
+                    </button>
+                </form>
+                <div class="result-box" id="bgResult" hidden>
+                    <div class="result-header">
+                        <span class="result-icon success">✅</span>
+                        <h3>Фон удалён!</h3>
+                    </div>
+                    <p class="result-info" id="bgInfo"></p>
+                    <a href="#" class="btn btn-primary btn-full" id="bgDownloadLink" target="_blank" rel="noopener">📥 Скачать фото без фона</a>
+                </div>
+                <div class="error-box" id="bgError" hidden role="alert"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Соцсети -->
+    <section id="social" class="section section-alt" aria-labelledby="social-title">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-badge">📱 Соцсети</span>
+                <h2 id="social-title" class="section-title">Фото для соцсетей</h2>
+                <p class="section-desc">Трендовые размеры + автоматическое улучшение кожи</p>
+            </div>
+            <div class="card">
+                <form id="socialForm" class="tool-form" novalidate>
+                    <div class="upload-area" id="socialUploadArea" role="button" tabindex="0" aria-label="Загрузить фото для соцсетей">
+                        <div class="upload-content">
+                            <span class="upload-icon">📱</span>
+                            <p class="upload-text">Перетащите фото сюда или <span class="upload-link">выберите файл</span></p>
+                            <p class="upload-hint">JPEG, PNG, WEBP — до 10 МБ</p>
+                        </div>
+                        <input type="file" id="socialFile" name="socialFile" accept="image/*" hidden required>
+                    </div>
+                    <div class="form-group photo-preview" id="socialPreview" hidden>
+                        <div class="preview-wrapper">
+                            <img id="socialPreviewImg" src="" alt="Предпросмотр загруженного фото">
+                            <button type="button" class="preview-remove" id="socialPreviewRemove" aria-label="Удалить фото">✕</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h4 class="settings-title">📐 Формат</h4>
+                        <div class="format-grid">
+                            <label class="format-option">
+                                <input type="radio" name="socialFormat" value="instagram" checked>
+                                <div class="format-card">
+                                    <span class="format-icon">📸</span>
+                                    <span class="format-name">Instagram</span>
+                                    <span class="format-size">1080×1080</span>
+                                </div>
+                            </label>
+                            <label class="format-option">
+                                <input type="radio" name="socialFormat" value="instagram-story">
+                                <div class="format-card">
+                                    <span class="format-icon">📱</span>
+                                    <span class="format-name">Stories</span>
+                                    <span class="format-size">1080×1920</span>
+                                </div>
+                            </label>
+                            <label class="format-option">
+                                <input type="radio" name="socialFormat" value="youtube">
+                                <div class="format-card">
+                                    <span class="format-icon">🎬</span>
+                                    <span class="format-name">YouTube</span>
+                                    <span class="format-size">1280×720</span>
+                                </div>
+                            </label>
+                            <label class="format-option">
+                                <input type="radio" name="socialFormat" value="facebook">
+                                <div class="format-card">
+                                    <span class="format-icon">👍</span>
+                                    <span class="format-name">Facebook</span>
+                                    <span class="format-size">1200×630</span>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="setting-item mt-3">
+                            <label>
+                                <input type="checkbox" id="skinEnhance" checked>
+                                🪄 Улучшить кожу лица (убрать дефекты)
+                            </label>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full" id="socialSubmitBtn">
+                        <span class="btn-text">✨ Создать для соцсетей</span>
+                        <span class="btn-loader hidden" id="socialLoader"></span>
+                    </button>
+                </form>
+                <div class="result-box" id="socialResult" hidden>
+                    <div class="result-header">
+                        <span class="result-icon success">✅</span>
+                        <h3>Готово!</h3>
+                    </div>
+                    <p class="result-info" id="socialInfo"></p>
+                    <a href="#" class="btn btn-primary btn-full" id="socialDownloadLink" target="_blank" rel="noopener">📥 Скачать</a>
+                </div>
+                <div class="error-box" id="socialError" hidden role="alert"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Футер -->
+    <footer class="footer" role="contentinfo">
+        <div class="container footer-content">
+            <div class="footer-brand">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">Media<span class="logo-accent">Tool</span></span>
+            </div>
+            <p class="footer-copy">© 2026 MediaTool. Все инструменты бесплатны.</p>
+        </div>
+    </footer>
+
+    <!-- Тостер уведомлений -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+        <span class="toast-message" id="toastMessage"></span>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
