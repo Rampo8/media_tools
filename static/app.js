@@ -182,49 +182,61 @@ function initPhotoForm() {
     ['sharpness', 'contrast', 'brightness'].forEach(name => {
         const slider = document.getElementById(`photo${name.charAt(0).toUpperCase() + name.slice(1)}`);
         const display = document.getElementById(`${name}Val`);
-        slider?.addEventListener('input', () => { display.textContent = slider.value; });
+        slider?.addEventListener('input', () => {
+            display.textContent = slider.value;
+            // Если фото уже загружено — перезапустить обработку
+            if (document.getElementById('photoFile').files.length > 0) {
+                processPhoto();
+            }
+        });
     });
 
     const form = document.getElementById('photoForm');
     if (!form) return;
 
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        hideAll('photo');
+    form.addEventListener('submit', (e) => e.preventDefault());
 
-        const file = document.getElementById('photoFile').files[0];
-        if (!file) {
-            showError('photoError', 'Выберите фото');
-            return;
-        }
-
-        setLoading('photoSubmitBtn', 'photoLoader', true);
-
-        const formData = new FormData();
-        formData.append('photo', file);
-        formData.append('sharpness', document.getElementById('photoSharpness').value);
-        formData.append('contrast', document.getElementById('photoContrast').value);
-        formData.append('brightness', document.getElementById('photoBrightness').value);
-
-        try {
-            const response = await fetch('/api/photo/enhance', {
-                method: 'POST',
-                body: formData
-            });
-
-            const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Ошибка обработки');
-
-            showResult('photoResult', 'photoInfo', 'photoDownloadLink',
-                `Размер: ${data.size} | Увеличение: 8x`, data.download_url);
-            showToast('✅ Фото улучшено!');
-
-        } catch (err) {
-            showError('photoError', err.message);
-        } finally {
-            setLoading('photoSubmitBtn', 'photoLoader', false);
+    // Авто-обработка при загрузке
+    document.getElementById('photoFile').addEventListener('change', () => {
+        if (document.getElementById('photoFile').files.length > 0) {
+            processPhoto();
         }
     });
+}
+
+async function processPhoto() {
+    const file = document.getElementById('photoFile').files[0];
+    if (!file) return;
+
+    hideAll('photo');
+    setLoading('photoSubmitBtn', 'photoLoader', true);
+    document.getElementById('photoSubmitBtn').textContent = '⏳ Обработка...';
+
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('sharpness', document.getElementById('photoSharpness').value);
+    formData.append('contrast', document.getElementById('photoContrast').value);
+    formData.append('brightness', document.getElementById('photoBrightness').value);
+
+    try {
+        const response = await fetch('/api/photo/enhance', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Ошибка обработки');
+
+        showResult('photoResult', 'photoInfo', 'photoDownloadLink',
+            `Размер: ${data.size} | ${data.dimensions} | Увеличение: 8x`, data.download_url);
+        showToast('✅ Фото автоматически улучшено!');
+
+    } catch (err) {
+        showError('photoError', err.message);
+    } finally {
+        setLoading('photoSubmitBtn', 'photoLoader', false);
+        document.getElementById('photoSubmitBtn').innerHTML = '<span class="btn-text">🔄 Обработать заново</span>';
+    }
 }
 
 /* ===================== Фон ===================== */
@@ -234,40 +246,46 @@ function initBgForm() {
     const form = document.getElementById('bgForm');
     if (!form) return;
 
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        hideAll('bg');
+    form.addEventListener('submit', (e) => e.preventDefault());
 
-        const file = document.getElementById('bgFile').files[0];
-        if (!file) {
-            showError('bgError', 'Выберите фото');
-            return;
-        }
-
-        setLoading('bgSubmitBtn', 'bgLoader', true);
-
-        const formData = new FormData();
-        formData.append('photo', file);
-
-        try {
-            const response = await fetch('/api/background/remove', {
-                method: 'POST',
-                body: formData
-            });
-
-            const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Ошибка удаления фона');
-
-            showResult('bgResult', 'bgInfo', 'bgDownloadLink',
-                `Размер: ${data.size} | Фон удалён`, data.download_url);
-            showToast('✅ Фон удалён!');
-
-        } catch (err) {
-            showError('bgError', err.message);
-        } finally {
-            setLoading('bgSubmitBtn', 'bgLoader', false);
+    // Авто-обработка при загрузке
+    document.getElementById('bgFile').addEventListener('change', () => {
+        if (document.getElementById('bgFile').files.length > 0) {
+            processBgRemove();
         }
     });
+}
+
+async function processBgRemove() {
+    const file = document.getElementById('bgFile').files[0];
+    if (!file) return;
+
+    hideAll('bg');
+    setLoading('bgSubmitBtn', 'bgLoader', true);
+    document.getElementById('bgSubmitBtn').textContent = '⏳ Удаление фона...';
+
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    try {
+        const response = await fetch('/api/background/remove', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Ошибка удаления фона');
+
+        showResult('bgResult', 'bgInfo', 'bgDownloadLink',
+            `Размер: ${data.size} | Фон удалён`, data.download_url);
+        showToast('✅ Фон автоматически удалён!');
+
+    } catch (err) {
+        showError('bgError', err.message);
+    } finally {
+        setLoading('bgSubmitBtn', 'bgLoader', false);
+        document.getElementById('bgSubmitBtn').innerHTML = '<span class="btn-text">🔄 Удалить фон заново</span>';
+    }
 }
 
 /* ===================== Соцсети ===================== */
@@ -277,51 +295,71 @@ function initSocialForm() {
     const form = document.getElementById('socialForm');
     if (!form) return;
 
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        hideAll('social');
+    form.addEventListener('submit', (e) => e.preventDefault());
 
-        const file = document.getElementById('socialFile').files[0];
-        if (!file) {
-            showError('socialError', 'Выберите фото');
-            return;
-        }
-
-        setLoading('socialSubmitBtn', 'socialLoader', true);
-
-        const format = document.querySelector('input[name="socialFormat"]:checked').value;
-        const skinEnhance = document.getElementById('skinEnhance').checked;
-
-        const formData = new FormData();
-        formData.append('photo', file);
-        formData.append('format', format);
-        formData.append('skin_enhance', skinEnhance ? '1' : '0');
-
-        try {
-            const response = await fetch('/api/social/create', {
-                method: 'POST',
-                body: formData
-            });
-
-            const data = await response.json();
-            if (!data.success) throw new Error(data.error || 'Ошибка создания');
-
-            const formatNames = {
-                'instagram': 'Instagram 1080×1080',
-                'instagram-story': 'Stories 1080×1920',
-                'youtube': 'YouTube 1280×720',
-                'facebook': 'Facebook 1200×630'
-            };
-
-            showResult('socialResult', 'socialInfo', 'socialDownloadLink',
-                `Формат: ${formatNames[format] || format}${skinEnhance ? ' | Кожа улучшена' : ''}`,
-                data.download_url);
-            showToast('✅ Готово для соцсетей!');
-
-        } catch (err) {
-            showError('socialError', err.message);
-        } finally {
-            setLoading('socialSubmitBtn', 'socialLoader', false);
+    // Авто-обработка при загрузке или смене формата
+    document.getElementById('socialFile').addEventListener('change', () => {
+        if (document.getElementById('socialFile').files.length > 0) {
+            processSocial();
         }
     });
+
+    document.querySelectorAll('input[name="socialFormat"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            if (document.getElementById('socialFile').files.length > 0) {
+                processSocial();
+            }
+        });
+    });
+
+    document.getElementById('skinEnhance').addEventListener('change', () => {
+        if (document.getElementById('socialFile').files.length > 0) {
+            processSocial();
+        }
+    });
+}
+
+async function processSocial() {
+    const file = document.getElementById('socialFile').files[0];
+    if (!file) return;
+
+    hideAll('social');
+    setLoading('socialSubmitBtn', 'socialLoader', true);
+    document.getElementById('socialSubmitBtn').textContent = '⏳ Создание...';
+
+    const format = document.querySelector('input[name="socialFormat"]:checked').value;
+    const skinEnhance = document.getElementById('skinEnhance').checked;
+
+    const formData = new FormData();
+    formData.append('photo', file);
+    formData.append('format', format);
+    formData.append('skin_enhance', skinEnhance ? '1' : '0');
+
+    try {
+        const response = await fetch('/api/social/create', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Ошибка создания');
+
+        const formatNames = {
+            'instagram': 'Instagram 1080×1080',
+            'instagram-story': 'Stories 1080×1920',
+            'youtube': 'YouTube 1280×720',
+            'facebook': 'Facebook 1200×630'
+        };
+
+        showResult('socialResult', 'socialInfo', 'socialDownloadLink',
+            `Формат: ${formatNames[format] || format}${skinEnhance ? ' | Кожа улучшена' : ''}`,
+            data.download_url);
+        showToast('✅ Автоматически готово для соцсетей!');
+
+    } catch (err) {
+        showError('socialError', err.message);
+    } finally {
+        setLoading('socialSubmitBtn', 'socialLoader', false);
+        document.getElementById('socialSubmitBtn').innerHTML = '<span class="btn-text">🔄 Создать заново</span>';
+    }
 }
