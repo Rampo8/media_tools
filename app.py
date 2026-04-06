@@ -231,7 +231,16 @@ def _get_realesrgan_model():
 
     _REALESRGAN_MODEL = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
     checkpoint = torch.load(model_path, map_location=_REALESRGAN_DEVICE, weights_only=True)
-    _REALESRGAN_MODEL.load_state_dict(checkpoint['params_ema'] if 'params_ema' in checkpoint else checkpoint)
+    
+    # Ключи могут быть под 'params_ema', 'params' или напрямую
+    if 'params_ema' in checkpoint:
+        state_dict = checkpoint['params_ema']
+    elif 'params' in checkpoint:
+        state_dict = checkpoint['params']
+    else:
+        state_dict = checkpoint
+    
+    _REALESRGAN_MODEL.load_state_dict(state_dict, strict=False)
     _REALESRGAN_MODEL.eval()
 
     logger.info("✅ Real-ESRGAN модель загружена")
