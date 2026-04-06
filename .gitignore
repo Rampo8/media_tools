@@ -4,6 +4,7 @@ __pycache__/
 .env
 uploads/*
 !uploads/.gitkeep
+models/*.pth
 *.log
 .venv/
 .egg-info/

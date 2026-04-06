@@ -151,13 +151,168 @@ def video_download():
 
 
 # =============================================================================
-# API: Улучшение фото (OpenCV + scikit-image) — полный пайплайн
+# API: Улучшение фото — Real-ESRGAN (PyTorch) + OpenCV + scikit-image
 # =============================================================================
+_REALESRGAN_MODEL = None
+_REALESRGAN_DEVICE = None
+
+def _get_realesrgan_model():
+    """Ленивая загрузка Real-ESRGAN модели"""
+    global _REALESRGAN_MODEL, _REALESRGAN_DEVICE
+
+    if _REALESRGAN_MODEL is not None:
+        return _REALESRGAN_MODEL, _REALESRGAN_DEVICE
+
+    import torch
+    from torch import nn
+    import os
+
+    # Определяем устройство
+    _REALESRGAN_DEVICE = 'cpu'  # CPU-only на Render
+
+    # RRDBNet архитектура (Real-ESRGAN)
+    class ResidualDenseBlock(nn.Module):
+        def __init__(self, num_feat=64, num_grow_ch=32):
+            super().__init__()
+            self.conv1 = nn.Conv2d(num_feat, num_grow_ch, 3, 1, 1)
+            self.conv2 = nn.Conv2d(num_feat + num_grow_ch, num_grow_ch, 3, 1, 1)
+            self.conv3 = nn.Conv2d(num_feat + 2 * num_grow_ch, num_grow_ch, 3, 1, 1)
+            self.conv4 = nn.Conv2d(num_feat + 3 * num_grow_ch, num_grow_ch, 3, 1, 1)
+            self.conv5 = nn.Conv2d(num_feat + 4 * num_grow_ch, num_feat, 3, 1, 1)
+            self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+        def forward(self, x):
+            x1 = self.lrelu(self.conv1(x))
+            x2 = self.lrelu(self.conv2(torch.cat((x, x1), 1)))
+            x3 = self.lrelu(self.conv3(torch.cat((x, x1, x2), 1)))
+            x4 = self.lrelu(self.conv4(torch.cat((x, x1, x2, x3), 1)))
+            x5 = self.conv5(torch.cat((x, x1, x2, x3, x4), 1))
+            return x5 * 0.2 + x
+
+    class RRDB(nn.Module):
+        def __init__(self, num_feat=64, num_grow_ch=32):
+            super().__init__()
+            self.rdb1 = ResidualDenseBlock(num_feat, num_grow_ch)
+            self.rdb2 = ResidualDenseBlock(num_feat, num_grow_ch)
+            self.rdb3 = ResidualDenseBlock(num_feat, num_grow_ch)
+
+        def forward(self, x):
+            out = self.rdb1(x)
+            out = self.rdb2(out)
+            out = self.rdb3(out)
+            return out * 0.2 + x
+
+    class RRDBNet(nn.Module):
+        def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4):
+            super().__init__()
+            self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+            self.body = nn.Sequential(*[RRDB(num_feat, num_grow_ch) for _ in range(num_block)])
+            self.conv_body = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+            self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+            self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+            self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
+            self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
+            self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+        def forward(self, x):
+            feat = x
+            feat = self.conv_first(feat)
+            body_feat = self.conv_body(self.body(feat))
+            feat = feat + body_feat
+            feat = self.lrelu(self.conv_up1(nn.functional.interpolate(feat, scale_factor=2, mode='nearest')))
+            feat = self.lrelu(self.conv_up2(nn.functional.interpolate(feat, scale_factor=2, mode='nearest')))
+            out = self.conv_last(self.lrelu(self.conv_hr(feat)))
+            return out
+
+    # Загрузка модели
+    model_path = os.path.join(os.path.dirname(__file__), 'models', 'realesrgan.pth')
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Real-ESRGAN модель не найдена: {model_path}")
+
+    _REALESRGAN_MODEL = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+    checkpoint = torch.load(model_path, map_location=_REALESRGAN_DEVICE, weights_only=True)
+    _REALESRGAN_MODEL.load_state_dict(checkpoint['params_ema'] if 'params_ema' in checkpoint else checkpoint)
+    _REALESRGAN_MODEL.eval()
+
+    logger.info("✅ Real-ESRGAN модель загружена")
+    return _REALESRGAN_MODEL, _REALESRGAN_DEVICE
+
+
+def _realesrgan_enhance(img_cv2):
+    """
+    Улучшение фото через Real-ESRGAN (PyTorch).
+    Принимает BGR numpy array, возвращает BGR numpy array.
+    """
+    import torch
+    import numpy as np
+    import cv2
+
+    model, device = _get_realesrgan_model()
+
+    h, w = img_cv2.shape[:2]
+
+    # Режем на tiles чтобы не было OOM
+    tile_size = 256
+    tile_pad = 16
+
+    # Конвертируем в RGB для модели
+    img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+    img_tensor = torch.from_numpy(img_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0)
+
+    # Pad если изображение меньше tile
+    pad_h = max(0, tile_size - h)
+    pad_w = max(0, tile_size - w)
+    if pad_h > 0 or pad_w > 0:
+        img_tensor = torch.nn.functional.pad(img_tensor, (0, pad_w, 0, pad_h), 'reflect')
+
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+
+    # Tile processing для больших изображений
+    scale = 4
+    output = torch.zeros_like(img_tensor)
+
+    if h * w > tile_size * tile_size:
+        # Tile-based inference
+        rows = range(0, img_tensor.shape[2], tile_size)
+        cols = range(0, img_tensor.shape[3], tile_size)
+
+        output_tiles = []
+        for r in rows:
+            row_tiles = []
+            for c in cols:
+                tile = img_tensor[:, :, r:r + tile_size, c:c + tile_size]
+                if tile.shape[2] < tile_size or tile.shape[3] < tile_size:
+                    tile = torch.nn.functional.pad(tile, (0, max(0, tile_size - tile.shape[3]), 0, max(0, tile_size - tile.shape[2])), 'reflect')
+                with torch.no_grad():
+                    out_tile = model(tile)
+                # Crop padding
+                out_h = tile.shape[2] // tile_size * scale * tile_size
+                out_w = tile.shape[3] // tile_size * scale * tile_size
+                row_tiles.append(out_tile[:, :, :out_h, :out_w])
+            output_tiles.append(torch.cat(row_tiles, dim=3))
+        output = torch.cat(output_tiles, dim=2)
+    else:
+        with torch.no_grad():
+            output = model(img_tensor)
+
+    # Конвертируем обратно в numpy BGR
+    output = output.squeeze(0).clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+    output = (output * 255).astype(np.uint8)
+    output = cv2.cvtColor(output, cv2.COLOR_RGB2BGR)
+
+    # Crop до оригинального размера * scale
+    out_h = h * scale
+    out_w = w * scale
+    output = output[:out_h, :out_w]
+
+    return output
+
+
 @app.route('/api/photo/enhance', methods=['POST'])
 def photo_enhance():
     import cv2
     import numpy as np
-    from skimage import exposure, restoration
+    from skimage import exposure
     from skimage.color import rgb2lab, lab2rgb
 
     if 'photo' not in request.files:
@@ -168,7 +323,7 @@ def photo_enhance():
         return jsonify({'success': False, 'error': 'Неподдерживаемый формат'}), 400
 
     try:
-        # ─── Чтение через OpenCV ───
+        # Чтение через OpenCV
         nparr = np.frombuffer(file.read(), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -178,76 +333,48 @@ def photo_enhance():
         original_h, original_w = img.shape[:2]
 
         # ================================================================
-        # ШАГ 1: ШУМОПОДАВЛЕНИЕ (убирает зернистость, ISO-шум)
+        # ШАГ 1: Real-ESRGAN (AI шумоподавление + 4x апскейл)
         # ================================================================
-        # fastNlMeansDenoisingColored — лучший для фото
-        img = cv2.fastNlMeansDenoisingColored(
-            img,
-            h=10,        # сила удаления шума (luminance)
-            hColor=10,   # сила удаления шума (color)
-            templateWindowSize=7,
-            searchWindowSize=21
-        )
+        logger.info(f"Real-ESRGAN: обработка {original_w}x{original_h}...")
+        img = _realesrgan_enhance(img)
 
         # ================================================================
-        # ШАГ 2: ПОВЫШЕНИЕ РЕЗКОСТИ (компенсация размытия)
+        # ШАГ 2: Дополнительное увеличение до 8x (Lanczos)
         # ================================================================
-        # Unsharp Mask через разность с размытым
-        blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=2.0)
-        # sharpened = img + strength * (img - blurred)
-        strength = 2.5
-        img = cv2.addWeighted(img, 1.0 + strength, blurred, -strength, 0)
-
-        # Дополнительная резкость мелких деталей (лапласиан)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        # Усиление контуров через лапласиан
-        detail_strength = 0.15
-        img_float = img.astype(np.float32)
-        laplacian_3ch = np.stack([laplacian] * 3, axis=-1)
-        img_float = img_float - detail_strength * laplacian_3ch.astype(np.float32)
-        img = np.clip(img_float, 0, 255).astype(np.uint8)
-
-        # ================================================================
-        # ШАГ 3: ИНТЕРПОЛЯЦИЯ ПИКСЕЛЕЙ (увеличение 8x с Lanczos)
-        # ================================================================
-        new_w = original_w * 8
-        new_h = original_h * 8
+        h, w = img.shape[:2]
+        target_8w = original_w * 8
+        target_8h = original_h * 8
 
         max_dim = 5000
-        if new_w > max_dim or new_h > max_dim:
+        if target_8w > max_dim or target_8h > max_dim:
             scale = min(max_dim / original_w, max_dim / original_h)
-            new_w = int(original_w * scale)
-            new_h = int(original_h * scale)
+            target_8w = int(original_w * scale)
+            target_8h = int(original_h * scale)
 
-        # Lanczos-4 — наилучшая интерполяция для увеличения
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+        if w < target_8w or h < target_8h:
+            img = cv2.resize(img, (target_8w, target_8h), interpolation=cv2.INTER_LANCZOS4)
+
+        new_w, new_h = target_8w, target_8h
 
         # ================================================================
-        # ШАГ 4: КОРРЕКЦИЯ КОНТРАСТА И ЦВЕТА
+        # ШАГ 3: Коррекция контраста и цвета
         # ================================================================
-
-        # 4a. Адаптивный контраст через CLAHE (по зонам)
+        # Адаптивный контраст CLAHE
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-        # 4b. Цветокоррекция через scikit-image (Gamma + LAB насыщенность)
+        # Цветокоррекция через scikit-image
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img_float = img_rgb.astype(np.float32) / 255.0
+        img_float = exposure.adjust_gamma(img_float, 0.95)
 
-        # Gamma correction — делает тени и светлые участки естественнее
-        img_float = exposure.adjust_gamma(img_float, 0.92)
-
-        # Повышение насыщенности в цветовом пространстве LAB
         img_lab = rgb2lab(img_float)
-        color_boost = 1.3  # +30% насыщенности
-        img_lab[:, :, 1] *= color_boost  # a-канал (красный-зелёный)
-        img_lab[:, :, 2] *= color_boost  # b-канал (синий-жёлтый)
+        img_lab[:, :, 1] *= 1.25
+        img_lab[:, :, 2] *= 1.25
         img_float = lab2rgb(img_lab)
 
-        # Финальная конвертация
         img_final = (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
         img_bgr = cv2.cvtColor(img_final, cv2.COLOR_RGB2BGR)
 
@@ -264,7 +391,7 @@ def photo_enhance():
             'success': True,
             'size': f"{file_size // 1024} КБ",
             'dimensions': f"{new_w}×{new_h}",
-            'quality': 'улучшено (шум→резкость→8x→контраст+цвет)',
+            'quality': 'Real-ESRGAN AI (шум → 4x → 8x → контраст + цвет)',
             'download_url': f'/uploads/{out_filename}'
         })
 
