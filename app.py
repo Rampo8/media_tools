@@ -15,8 +15,13 @@ from pathlib import Path
 
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from werkzeug.utils import secure_filename
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
+import cv2
+import numpy as np
+from skimage import exposure, restoration, img_as_ubyte
+from skimage.color import rgb2lab, lab2rgb
 import yt_dlp
+import io
 
 # =============================================================================
 # Конфигурация
@@ -142,7 +147,7 @@ def video_download():
 
 
 # =============================================================================
-# API: Улучшение фото
+# API: Улучшение фото (OpenCV + scikit-image)
 # =============================================================================
 @app.route('/api/photo/enhance', methods=['POST'])
 def photo_enhance():
@@ -158,43 +163,78 @@ def photo_enhance():
         contrast = float(request.form.get('contrast', 1.2))
         brightness = float(request.form.get('brightness', 1.1))
 
-        img = Image.open(file.stream)
-        if img.mode in ('RGBA', 'LA', 'P'):
-            img = img.convert('RGB')
+        # Читаем через OpenCV
+        nparr = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        original_width, original_height = img.size
+        if img is None:
+            return jsonify({'success': False, 'error': 'Не удалось прочитать изображение'}), 400
 
-        # Увеличение в 8 раз
-        new_width = original_width * 8
-        new_height = original_height * 8
+        original_h, original_w = img.shape[:2]
 
-        # Ограничение по максимальному размеру (5000px)
+        # ─── 1. Увеличение в 8 раз (OpenCV Lanczos) ───
+        new_w = original_w * 8
+        new_h = original_h * 8
+
         max_dim = 5000
-        if new_width > max_dim or new_height > max_dim:
-            scale = min(max_dim / original_width, max_dim / original_height)
-            new_width = int(original_width * scale)
-            new_height = int(original_height * scale)
+        if new_w > max_dim or new_h > max_dim:
+            scale = min(max_dim / original_w, max_dim / original_h)
+            new_w = int(original_w * scale)
+            new_h = int(original_h * scale)
 
-        img = img.resize((new_width, new_height), Image.NEAREST)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
-        # Резкость
-        img = ImageEnhance.Sharpness(img).enhance(sharpness)
-        # Контраст
-        img = ImageEnhance.Contrast(img).enhance(contrast)
-        # Яркость
-        img = ImageEnhance.Brightness(img).enhance(brightness)
+        # ─── 2. Яркость (простое умножение с клиппингом) ───
+        img = np.clip(img.astype(np.float32) * brightness, 0, 255).astype(np.uint8)
+
+        # ─── 3. Контраст через CLAHE (адаптивный контраст) ───
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel = lab[:, :, 0]
+
+        # CLAHE: clipLimit контролирует силу контраста
+        clip_limit = max(1.0, contrast * 2.0)
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+        lab[:, :, 0] = clahe.apply(l_channel)
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        # ─── 4. Резкость через Unsharp Mask (OpenCV) ───
+        # Размытие
+        blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=3)
+        # Unsharp mask: sharpened = img + strength * (img - blurred)
+        strength = sharpness
+        img = cv2.addWeighted(img, 1.0 + strength, blurred, -strength, 0)
+
+        # ─── 5. Цветокоррекция через scikit-image (гамма + насыщенность) ───
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_float = img_rgb.astype(np.float32) / 255.0
+
+        # Gamma correction для естественных цветов
+        gamma = 1.0 / max(0.8, contrast * 0.9)
+        img_float = exposure.adjust_gamma(img_float, gamma)
+
+        # Повышение насыщенности в LAB
+        img_lab = rgb2lab(img_float)
+        # Увеличиваем a и b каналы (цветность)
+        color_boost = 1.0 + (contrast - 1.0) * 0.5
+        img_lab[:, :, 1] *= color_boost
+        img_lab[:, :, 2] *= color_boost
+        img_float = lab2rgb(img_lab)
+
+        # Обратно в uint8
+        img_final = (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
+        img_bgr = cv2.cvtColor(img_final, cv2.COLOR_RGB2BGR)
 
         # Сохранение
         out_filename = generate_filename('jpg')
         out_path = UPLOAD_DIR / out_filename
-        img.save(str(out_path), 'JPEG', quality=95, optimize=True)
+        cv2.imwrite(str(out_path), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
         file_size = out_path.stat().st_size
 
         return jsonify({
             'success': True,
             'size': f"{file_size // 1024} КБ",
-            'dimensions': f"{new_width}×{new_height}",
+            'dimensions': f"{new_w}×{new_h}",
             'download_url': f'/uploads/{out_filename}'
         })
 
@@ -254,7 +294,7 @@ def background_remove():
 
 
 # =============================================================================
-# API: Фото для соцсетей
+# API: Фото для соцсетей (OpenCV + scikit-image)
 # =============================================================================
 @app.route('/api/social/create', methods=['POST'])
 def social_create():
@@ -278,47 +318,73 @@ def social_create():
         }
         target_w, target_h = formats.get(social_format, (1080, 1080))
 
-        img = Image.open(file.stream)
-        if img.mode in ('RGBA', 'LA', 'P'):
-            img = img.convert('RGB')
+        # Читаем через OpenCV
+        nparr = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify({'success': False, 'error': 'Не удалось прочитать изображение'}), 400
 
-        # Улучшение кожи лица (если включено)
+        h, w = img.shape[:2]
+
+        # ─── Улучшение кожи лица (OpenCV + scikit-image) ───
         if skin_enhance:
-            # Лёгкое размытие для сглаживания дефектов
-            img = img.filter(ImageFilter.GaussianBlur(radius=0.8))
-            # Повышение резкости (чтобы не потерять детали)
-            img = ImageEnhance.Sharpness(img).enhance(1.3)
-            # Небольшое повышение яркости
-            img = ImageEnhance.Brightness(img).enhance(1.05)
-            # Лёгкий контраст
-            img = ImageEnhance.Contrast(img).enhance(1.1)
+            # Bilateral filter — сглаживает кожу, сохраняет края
+            img = cv2.bilateralFilter(img, d=9, sigmaColor=75, sigmaSpace=75)
 
-        # Кадрирование по центру под нужный формат
-        orig_w, orig_h = img.size
+            # denoise_nlmeans — убирает шум и мелкие дефекты
+            img_float = img.astype(np.float32) / 255.0
+            denoised = restoration.denoise_nl_means(
+                img_float,
+                h=0.08,
+                fast_mode=True,
+                patch_size=5,
+                patch_distance=6,
+                multichannel=True
+            )
+            img = (np.clip(denoised, 0, 1) * 255).astype(np.uint8)
+
+            # Лёгкий Unsharp Mask для восстановления резкости
+            blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=1.5)
+            img = cv2.addWeighted(img, 1.3, blurred, -0.3, 0)
+
+            # Gamma + насыщенность
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            img_rgb = exposure.adjust_gamma(img_rgb, 0.95)
+            img_lab = rgb2lab(img_rgb)
+            img_lab[:, :, 1] *= 1.15
+            img_lab[:, :, 2] *= 1.15
+            img = cv2.cvtColor(lab2rgb(img_lab), cv2.COLOR_RGB2BGR)
+            img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
+        # ─── Кадрирование по центру ───
         target_ratio = target_w / target_h
-        orig_ratio = orig_w / orig_h
+        orig_ratio = w / h
 
         if orig_ratio > target_ratio:
-            # Слишком широкое — обрезаем по бокам
-            new_w = int(orig_h * target_ratio)
-            left = (orig_w - new_w) // 2
-            img = img.crop((left, 0, left + new_w, orig_h))
+            new_w = int(h * target_ratio)
+            left = (w - new_w) // 2
+            img = img[:, left:left + new_w]
         else:
-            # Слишком высокое — обрезаем сверху и снизу
-            new_h = int(orig_w / target_ratio)
-            top = (orig_h - new_h) // 2
-            img = img.crop((0, top, orig_w, top + new_h))
+            new_h = int(w / target_ratio)
+            top = (h - new_h) // 2
+            img = img[top:top + new_h]
 
-        # Ресайз под целевой размер
-        img = img.resize((target_w, target_h), Image.LANCZOS)
+        # Ресайз (Lanczos)
+        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
 
-        # Финальная обработка
-        img = ImageEnhance.Sharpness(img).enhance(1.2)
-        img = ImageEnhance.Contrast(img).enhance(1.15)
+        # ─── Финальная обработка (CLAHE + резкость) ───
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
+        blurred = cv2.GaussianBlur(img, (0, 0), sigmaX=1)
+        img = cv2.addWeighted(img, 1.2, blurred, -0.2, 0)
+
+        # Сохранение
         out_filename = generate_filename('jpg')
         out_path = UPLOAD_DIR / out_filename
-        img.save(str(out_path), 'JPEG', quality=95, optimize=True)
+        cv2.imwrite(str(out_path), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
         file_size = out_path.stat().st_size
 
