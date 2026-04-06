@@ -13,15 +13,16 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
-from PIL import Image
-import cv2
-import numpy as np
-from skimage import exposure, restoration, img_as_ubyte
-from skimage.color import rgb2lab, lab2rgb
-import yt_dlp
-import io
+import os
+import uuid
+import logging
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# Ленивые импорты — тяжелые библиотеки загружаются только при вызове API
 
 # =============================================================================
 # Конфигурация
@@ -84,6 +85,9 @@ def index():
 # =============================================================================
 @app.route('/api/video/download', methods=['POST'])
 def video_download():
+    import cv2
+    import yt_dlp
+
     data = request.get_json()
     url = data.get('url', '').strip()
     quality = data.get('quality', 1080)
@@ -151,6 +155,11 @@ def video_download():
 # =============================================================================
 @app.route('/api/photo/enhance', methods=['POST'])
 def photo_enhance():
+    import cv2
+    import numpy as np
+    from skimage import exposure
+    from skimage.color import rgb2lab, lab2rgb
+
     if 'photo' not in request.files:
         return jsonify({'success': False, 'error': 'Файл не загружен'}), 400
 
@@ -248,6 +257,9 @@ def photo_enhance():
 # =============================================================================
 @app.route('/api/background/remove', methods=['POST'])
 def background_remove():
+    from rembg import remove, new_session
+    from PIL import Image as PILImage
+
     if 'photo' not in request.files:
         return jsonify({'success': False, 'error': 'Файл не загружен'}), 400
 
@@ -256,9 +268,7 @@ def background_remove():
         return jsonify({'success': False, 'error': 'Неподдерживаемый формат'}), 400
 
     try:
-        from rembg import remove, new_session
-
-        img = Image.open(file.stream)
+        img = PILImage.open(file.stream)
         if img.mode == 'P':
             img = img.convert('RGBA')
         elif img.mode == 'L':
@@ -287,7 +297,7 @@ def background_remove():
         })
 
     except ImportError:
-        return jsonify({'success': False, 'error': 'rembg не установлена. pip install rembg onnxruntime'}), 500
+        return jsonify({'success': False, 'error': 'Удаление фона временно недоступно'}), 503
     except Exception as e:
         logger.error(f"Ошибка удаления фона: {e}")
         return jsonify({'success': False, 'error': f'Ошибка: {str(e)[:200]}'}), 500
@@ -298,6 +308,11 @@ def background_remove():
 # =============================================================================
 @app.route('/api/social/create', methods=['POST'])
 def social_create():
+    import cv2
+    import numpy as np
+    from skimage import exposure, restoration
+    from skimage.color import rgb2lab, lab2rgb
+
     if 'photo' not in request.files:
         return jsonify({'success': False, 'error': 'Файл не загружен'}), 400
 
@@ -430,16 +445,10 @@ if __name__ == '__main__':
     cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
     cleanup_thread.start()
 
+    port = int(os.environ.get('PORT', 5000))
     logger.info("=" * 60)
-    logger.info("🚀 MediaTool — запуск веб-приложения")
+    logger.info(f"🚀 MediaTool — запуск (порт {port})")
+    logger.info("💡 Видео, Фото, Фон, Соцсети — готовы")
     logger.info("=" * 60)
 
-    # Проверка зависимостей
-    try:
-        import rembg
-        logger.info("✅ rembg установлен")
-    except ImportError:
-        logger.warning("⚠️ rembg не установлен — удаление фона не будет работать")
-        logger.warning("💡 pip install rembg onnxruntime")
-
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)
